@@ -9,7 +9,7 @@ declare -a available_tags
 declare -a used_hosts=()
 declare -A hostname_counts
 
-CONFIG_FILE="/home/ubuntu/tools/config.cfg"
+CONFIG_FILE="$HOME/.config/ansiscale/confansiscale.cfg"
 
 # Load configuration
 load_config() {
@@ -23,6 +23,7 @@ load_config() {
 
 # Create default config file
 create_default_config() {
+    mkdir -p "$(dirname "$CONFIG_FILE")"
     cat > "$CONFIG_FILE" << EOL
 API_KEY=''
 TAILNET_ORG=''
@@ -34,10 +35,12 @@ RETRY_MAX_TIME=60
 DEBUG_MODE=false
 MATCH_BY=name
 EOL
+    chmod 600 "$CONFIG_FILE"  # Secure the config file
 }
 
 # Save configuration
 save_config() {
+    mkdir -p "$(dirname "$CONFIG_FILE")"
     cat > "$CONFIG_FILE" << EOL
 API_KEY='${API_KEY}'
 TAILNET_ORG='${TAILNET_ORG}'
@@ -49,6 +52,57 @@ RETRY_MAX_TIME=${RETRY_MAX_TIME}
 DEBUG_MODE=${DEBUG_MODE}
 MATCH_BY=${MATCH_BY}
 EOL
+    chmod 600 "$CONFIG_FILE"  # Secure the config file
+}
+
+# Add this function after the other function definitions
+validate_api_key() {
+    local key=$1
+    if [[ ${#key} -eq 61 && $key =~ ^tskey-api-[a-zA-Z0-9-]+$ ]]; then
+        echo -e "\033[1;32m(Valid API key)\033[0m"
+        return 0
+    else
+        echo -e "\033[1;31m(Invalid API key)\033[0m"
+        return 1
+    fi
+}
+
+# Add this new function
+first_run_setup() {
+    clear
+    echo -e "\033[1;34mFirst Time Setup\033[0m"
+    echo -e "\033[1;34m---------------\033[0m"
+    echo -e "\033[1;33mPlease visit: https://login.tailscale.com/admin/settings/general\033[0m"
+    echo -e "\033[1;33mto find your API key and organization name.\033[0m"
+    echo
+    
+    while true; do
+        read -p "Enter API Key: " new_key
+        if validate_api_key "$new_key"; then
+            API_KEY="$new_key"
+            break
+        else
+            echo -e "\033[1;33mAPI keys should be 61 characters long and start with 'ts'\033[0m"
+            if ! get_yes_no "Try again?"; then
+                exit 1
+            fi
+        fi
+    done
+    
+    read -p "Enter Tailnet Organization: " TAILNET_ORG
+    
+    # Set default values for other settings
+    CONNECT_TIMEOUT=10
+    MAX_TIME=30
+    RETRY=3
+    RETRY_DELAY=5
+    RETRY_MAX_TIME=60
+    DEBUG_MODE=false
+    MATCH_BY=name
+    
+    save_config
+    echo -e "\033[1;32mConfiguration saved successfully!\033[0m"
+    sleep 2
 }
 
 # Settings menu
@@ -70,7 +124,22 @@ settings_menu() {
         read -p $'\033[1;33mSelect an option: \033[0m' choice
         
         case $choice in
-            1) read -p "Enter API Key: " API_KEY ;;
+            1) 
+                while true; do
+                    read -p "Enter API Key: " new_key
+                    if validate_api_key "$new_key"; then
+                        API_KEY="$new_key"
+                        break
+                    else
+                        echo -e "\033[1;33mAPI keys should be 61 characters long and start with 'ts'\033[0m"
+                        if get_yes_no "Try again?"; then
+                            continue
+                        else
+                            break
+                        fi
+                    fi
+                done
+                ;;
             2) read -p "Enter Tailnet Organization: " TAILNET_ORG ;;
             3) read -p "Enter Connection Timeout: " CONNECT_TIMEOUT ;;
             4) read -p "Enter Max Time: " MAX_TIME ;;
@@ -407,68 +476,98 @@ generate_inventory() {
                 tag_name="tag:$tag_name"
             fi
             
-            if [ "$use_ssh_keys" = true ]; then
-                echo "$TAILSCALE_STATUS" | jq -r --arg tag "$tag_name" --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
-                    (.Self, .Peer[]?)
-                    | select(.Tags[]? == $tag)
-                    | select(.HostName != null and .DNSName != null)
-                    | (.HostName + " " + (.DNSName | rtrimstr("."))) as $hostname |
-                    "    " + $hostname + ":\n" +
-                    "      ansible_host: " + (.DNSName | rtrimstr(".")) + "\n" +
-                    "      ansible_user: " + $user + "\n" +
-                    "      ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + (.DNSName | rtrimstr(".")))
-                ' >> inventory.yaml
-            else
-                echo "$TAILSCALE_STATUS" | jq -r --arg tag "$tag_name" '
-                    (.Self, .Peer[]?)
-                    | select(.Tags[]? == $tag)
-                    | select(.HostName != null and .DNSName != null)
-                    | (.HostName + " " + (.DNSName | rtrimstr("."))) as $hostname
-                    | "    " + $hostname + ":\n      ansible_host: " + (.DNSName | rtrimstr("."))
-                ' >> inventory.yaml
-            fi
+            # Get hosts that match this tag and update used_hosts array
+            local matching_hosts=$(echo "$TAILSCALE_STATUS" | jq -r --arg tag "$tag_name" '
+                [(.Self, .Peer[]?)
+                | select(.Tags[]? == $tag)
+                | select(.HostName != null and .DNSName != null)
+                | .HostName + " " + (.DNSName | rtrimstr("."))]
+                | unique
+                | .[]')
 
-            # Keep track of which hosts we've assigned
-            used_hosts+=("$hostname")
+            while IFS= read -r hostname; do
+                if [ -n "$hostname" ] && [[ ! " ${used_hosts[@]} " =~ " ${hostname} " ]]; then
+                    used_hosts+=("$hostname")
+                    
+                    # Quote hostnames that contain spaces
+                    local quoted_hostname="$hostname"
+                    if [[ "$hostname" == *" "* ]]; then
+                        quoted_hostname="\"$hostname\""
+                    fi
+                    
+                    if [ "$use_ssh_keys" = true ]; then
+                        local dnsname=$(echo "$hostname" | awk '{print $NF}')
+                        echo "${indent}${quoted_hostname}:" >> inventory.yaml
+                        echo "${indent}  ansible_host: $dnsname" >> inventory.yaml
+                        echo "${indent}  ansible_user: $USER" >> inventory.yaml
+                        echo "${indent}  ansible_ssh_private_key_file: $KEY_DIR/${SSH_ALGO}_${dnsname}" >> inventory.yaml
+                    else
+                        local dnsname=$(echo "$hostname" | awk '{print $NF}')
+                        echo "${indent}${quoted_hostname}:" >> inventory.yaml
+                        echo "${indent}  ansible_host: $dnsname" >> inventory.yaml
+                    fi
+                fi
+            done <<< "$matching_hosts"
         }
 
         # Write inventory structure
+        declare -A group_hosts
+
         for parent in "${parents[@]}"; do
-            echo "$parent:" >> inventory.yaml
-            
             if [ "$parent" = "hosts" ]; then
-                write_hosts "$parent" "  "
+                echo "$parent:" >> inventory.yaml
+                echo "  hosts:" >> inventory.yaml
+                write_hosts "$parent" "    "
                 continue
             fi
+            
+            # Write parent group directly without nesting
+            echo "$parent:" >> inventory.yaml
             
             if [ -n "${parent_children[$parent]}" ]; then
                 echo "  children:" >> inventory.yaml
                 for child in ${parent_children[$parent]}; do
                     echo "    $child:" >> inventory.yaml
-                    write_hosts "$child" "      "
+                    echo "      hosts:" >> inventory.yaml
+                    write_hosts "$child" "        "
                 done
             else
-                write_hosts "$parent" "  "
+                echo "  hosts:" >> inventory.yaml
+                write_hosts "$parent" "    "
             fi
         done
 
-        # Before writing unknown hosts, ensure used_hosts_json is valid even if used_hosts is empty
+        # Add unknown section only if there are unassigned hosts
         if [ "${#used_hosts[@]}" -eq 0 ]; then
             used_hosts_json='[]'
         else
             used_hosts_json=$(printf '%s\n' "${used_hosts[@]}" | jq -R . | jq -s .)
         fi
 
-        # Add unknown group for unmatched hosts (those without matching tags)
-        echo "unknown:" >> inventory.yaml
-        echo "  hosts:" >> inventory.yaml
-        echo "$TAILSCALE_STATUS" | jq -r --argjson used_hosts "$used_hosts_json" '
-            (.Self, .Peer[]?)
+        local unknown_hosts=$(echo "$TAILSCALE_STATUS" | jq -r --argjson used_hosts "$used_hosts_json" '
+            [(.Self, .Peer[]?)
             | select(.HostName != null and .DNSName != null)
             | (.HostName + " " + (.DNSName | rtrimstr("."))) as $hostname
             | select($used_hosts | index($hostname) | not)
-            | "    " + $hostname + ":\n      ansible_host: " + (.DNSName | rtrimstr("."))
-        ' >> inventory.yaml
+            | $hostname]
+            | unique[]')
+
+        if [ -n "$unknown_hosts" ]; then
+            echo "unknown:" >> inventory.yaml
+            echo "  hosts:" >> inventory.yaml
+            while IFS= read -r hostname; do
+                if [ -n "$hostname" ]; then
+                    # Quote hostnames that contain spaces
+                    local quoted_hostname="$hostname"
+                    if [[ "$hostname" == *" "* ]]; then
+                        quoted_hostname="\"$hostname\""
+                    fi
+                    local dnsname=$(echo "$hostname" | awk '{print $NF}')
+                    echo "    ${quoted_hostname}:" >> inventory.yaml
+                    echo "      ansible_host: $dnsname" >> inventory.yaml
+                fi
+            done <<< "$unknown_hosts"
+        fi
     fi
 }
 
@@ -523,8 +622,27 @@ get_yes_no() {
     done
 }
 
+# Function to check for cyclic relationships
+is_cycle() {
+    local parent="$1"
+    local child="$2"
+    if [[ "$child" == "$parent" ]]; then
+        return 0
+    fi
+    for sub_child in ${parent_children["$child"]}; do
+        if is_cycle "$parent" "$sub_child"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Function to collect parent-child relationships
 collect_relationships() {
+    # Clear existing relationships
+    parents=()
+    parent_children=()
+    
     show_available_tags
 
     if ! get_yes_no "Would you like to enter a parent?"; then
@@ -537,7 +655,7 @@ collect_relationships() {
         parent=$(get_tag_selection "Enter parent name or select a tag")
         parents+=("$parent")
         parent_children["$parent"]=""
-        
+
         while true; do
             echo "Enter child names or select tags (separate by semicolons):"
             read -p "Enter numbers or custom names: " child_input
@@ -558,15 +676,20 @@ collect_relationships() {
                         child="$child_selection"
                     fi
                 fi
-                if [ -z "${parent_children[$parent]}" ]; then
-                    parent_children["$parent"]="$child"
+                # Prevent adding a group as its own child or creating cycles
+                if is_cycle "$parent" "$child"; then
+                    echo "Cannot add '$child' as it creates a cyclic relationship. Skipping."
                 else
-                    parent_children["$parent"]="${parent_children[$parent]} $child"
+                    if [ -z "${parent_children[$parent]}" ]; then
+                        parent_children["$parent"]="$child"
+                    else
+                        parent_children["$parent"]="${parent_children[$parent]} $child"
+                    fi
                 fi
             done
             break
         done
-        
+
         if ! get_yes_no "Would you like to add another parent?"; then
             break
         fi
@@ -575,6 +698,10 @@ collect_relationships() {
 
 # Function to collect custom attribute relationships
 collect_custom_relationships() {
+    # Clear existing relationships
+    parents=()
+    parent_children=()
+    
     local custom_tags=("$@")
     echo -e "\033[1;34mAvailable custom attributes for grouping:\033[0m"
     for i in "${!custom_tags[@]}"; do
@@ -592,7 +719,7 @@ collect_custom_relationships() {
     while true; do
         echo -e "\033[1;32mSelect parent group:\033[0m"
         read -p $'\033[1;33mEnter number or custom name: \033[0m' parent_choice
-        
+
         if [[ "$parent_choice" =~ ^[0-9]+$ ]]; then
             if (( parent_choice > 0 && parent_choice <= ${#custom_tags[@]} )); then
                 parent="${custom_tags[$((parent_choice-1))]}"
@@ -605,10 +732,10 @@ collect_custom_relationships() {
         else
             parent="$parent_choice"
         fi
-        
+
         parents+=("$parent")
         parent_children["$parent"]=""
-        
+
         while get_yes_no "Would you like to add child groups to '$parent'?"; do
             echo "Enter child groups (separate by semicolons):"
             read -p "Enter numbers or custom names: " child_input
@@ -627,15 +754,20 @@ collect_custom_relationships() {
                 else
                     child="$child_selection"
                 fi
-                if [ -z "${parent_children[$parent]}" ]; then
-                    parent_children["$parent"]="$child"
+                # Prevent adding a group as its own child or creating cycles
+                if is_cycle "$parent" "$child"; then
+                    echo "Cannot add '$child' as it creates a cyclic relationship. Skipping."
                 else
-                    parent_children["$parent"]="${parent_children[$parent]} $child"
+                    if [ -z "${parent_children[$parent]}" ]; then
+                        parent_children["$parent"]="$child"
+                    else
+                        parent_children["$parent"]="${parent_children[$parent]} $child"
+                    fi
                 fi
             done
             break
         done
-        
+
         if ! get_yes_no "Would you like to add another parent group?"; then
             break
         fi
@@ -645,8 +777,7 @@ collect_custom_relationships() {
 # Load config and check for first run
 load_config
 if [ -z "$API_KEY" ] || [ -z "$TAILNET_ORG" ]; then
-    echo -e "\033[1;31mFirst time setup detected. Please configure API settings.\033[0m"
-    settings_menu
+    first_run_setup
 fi
 
 # Start main menu
