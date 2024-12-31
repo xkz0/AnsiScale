@@ -13,48 +13,44 @@ https://login.tailscale.com/admin/settings/keys
 ###### I want to state none of this is revolutionary, I just manage hundreds of devices at work and my inventory is constantly increasing/changing so this makes it very easy to capture changes I've missed.
 ### Here's an example inventory generated in about 30 seconds:
 ```
-# Ansible inventory generated from Tailscale status
+# Ansible inventory generated from custom data
 ---
-tag:client1:
+servers:
   children:
-    tag:cameras:
+    group_a:
       hosts:
-        "Camera2 camera2.example.com":
-          ansible_host: camera2.example.com
-        "Camera1 camera1.example.com":
-          ansible_host: camera1.example.com
-    tag:clients:
+          server-001.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-001.example.com
+            ansible_user: user
+          server-002.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-002.example.com
+            ansible_user: user
+          server-003.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-003.example.com
+            ansible_user: user
+          server-004.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-004.example.com
+            ansible_user: user
+          server-005.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-005.example.com
+            ansible_user: user
+
+    group_b:
       hosts:
-        "mediabox1 mediabox1.example.com":
-          ansible_host: mediabox1.example.com
-        "laptop1 laptop1.example.com":
-          ansible_host: laptop1.example.com
-        "tablet1 tablet1.example.com":
-          ansible_host: tablet1.example.com
-        "phone1 phone1.example.com":
-          ansible_host: phone1.example.com
-        "camera3 camera3.example.com":
-          ansible_host: camera3.example.com
-        "raspi1 raspi1.example.com":
-          ansible_host: raspi1.example.com
-        "desktop1 desktop1.example.com":
-          ansible_host: desktop1.example.com
-        "laptop2 laptop2.example.com":
-          ansible_host: laptop2.example.com
-tag:server:
-  children:
-    tag:servers:
-      hosts:
-        "nas1 nas1.example.com":
-          ansible_host: nas1.example.com
-        "nas2 nas2.example.com":
-          ansible_host: nas2.example.com
-        "testserver1 testserver1.example.com":
-          ansible_host: testserver1.example.com
-unknown:
-  hosts:
-    "desktop2 desktop2.example.com":
-      ansible_host: desktop2.example.com
-    "desktop3 desktop3.example.com":
-      ansible_host: desktop3.example.com
+          server-006.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-006.example.com
+            ansible_user: user
+          server-007.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-007.example.com
+            ansible_user: user
+          server-008.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-008.example.com
+            ansible_user: user
+          server-009.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-009.example.com
+            ansible_user: user
+          server-010.example.com:
+            ansible_ssh_private_key_file: /path/to/ssh_keys/id_rsa_server-010.example.com
+            ansible_user: user
+
 ```
