@@ -53,14 +53,15 @@ MATCH_BY=${MATCH_BY}
 EOL
 }
 
-# Add validate_api_key function
+# Update validate_api_key function
 validate_api_key() {
     local key=$1
-    if [[ ${#key} -eq 61 && $key =~ ^tskey-api-[a-zA-Z0-9-]+$ ]]; then
+    if [[ ${#key} -ge 1 && ${#key} -le 100 && $key =~ ^tskey-api-[A-Za-z0-9-]+$ ]]; then
         echo -e "\033[1;32m(Valid API key)\033[0m"
         return 0
     else
         echo -e "\033[1;31m(Invalid API key)\033[0m"
+        echo -e "\033[1;33mAPI keys should be 55 characters long and start with 'tskey-api-'\033[0m"
         return 1
     fi
 }
