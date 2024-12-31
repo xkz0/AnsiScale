@@ -40,7 +40,6 @@ EOL
 
 # Save configuration
 save_config() {
-    mkdir -p "$(dirname "$CONFIG_FILE")"
     cat > "$CONFIG_FILE" << EOL
 API_KEY='${API_KEY}'
 TAILNET_ORG='${TAILNET_ORG}'
@@ -52,10 +51,9 @@ RETRY_MAX_TIME=${RETRY_MAX_TIME}
 DEBUG_MODE=${DEBUG_MODE}
 MATCH_BY=${MATCH_BY}
 EOL
-    chmod 600 "$CONFIG_FILE"  # Secure the config file
 }
 
-# Add this function after the other function definitions
+# Add validate_api_key function
 validate_api_key() {
     local key=$1
     if [[ ${#key} -eq 61 && $key =~ ^tskey-api-[a-zA-Z0-9-]+$ ]]; then
@@ -67,7 +65,7 @@ validate_api_key() {
     fi
 }
 
-# Add this new function
+# Add first_run_setup function
 first_run_setup() {
     clear
     echo -e "\033[1;34mFirst Time Setup\033[0m"
@@ -266,7 +264,26 @@ get_devices_with_custom_tag() {
         }'
 }
 
-# Modified main menu
+# Add this new function before main_menu()
+generate_hosts_list() {
+    echo -e "\033[1;33mFetching host data...\033[0m"
+    local data=$(get_tailscale_data "custom")
+    
+    # Extract and sort unique DNS names
+    echo "$data" | jq -r '
+        . as $raw |
+        try fromjson catch $raw |
+        .[] | 
+        select(.name != null) |
+        .name
+    ' | sort -u > hosts.txt
+    
+    local count=$(wc -l < hosts.txt)
+    echo -e "\033[1;32mGenerated hosts.txt with $count unique hosts\033[0m"
+    read -p "Press Enter to continue..."
+}
+
+# Modify the main_menu function - replace it entirely
 main_menu() {
     while true; do
         clear
@@ -274,8 +291,9 @@ main_menu() {
         echo -e "\033[1;34m------------------\033[0m"
         echo -e "\033[1;31m1. Generate Inventory (Using Tags)\033[0m"
         echo -e "\033[1;32m2. Generate Inventory (Using Custom Data)\033[0m"
-        echo -e "\033[1;35m3. Settings\033[0m"
-        echo -e "\033[1;36m4. Exit\033[0m"
+        echo -e "\033[1;33m3. Generate Hosts List\033[0m"
+        echo -e "\033[1;35m4. Settings\033[0m"
+        echo -e "\033[1;36m5. Exit\033[0m"
         
         read -p "Select an option: " choice
         
@@ -283,8 +301,9 @@ main_menu() {
             1) generate_inventory "tags" ;;
             2) echo -e "\033[1;33mMaking API request, this may take some time...\033[0m"
                generate_inventory "custom" ;;
-            3) settings_menu ;;
-            4) exit 0 ;;
+            3) generate_hosts_list ;;
+            4) settings_menu ;;
+            5) exit 0 ;;
             *) echo "Invalid option" ;;
         esac
     done
@@ -367,16 +386,14 @@ generate_inventory() {
                 devices_json=$(get_devices_with_custom_tag "$TAILSCALE_STATUS" "${custom_tags[0]}")
                 if [ "$use_ssh_keys" = true ]; then
                     echo "$devices_json" | jq -r --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
-                        (.hostname + " " + .dnsname) as $hostname |
-                        "    " + $hostname + ":\n" +
-                        "      ansible_host: " + .dnsname + "\n" +
-                        "      ansible_user: " + $user + "\n" +
-                        "      ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname)
+                        "          " + .dnsname + ":\n" +
+                        "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname) + "\n" +
+                        "          ansible_user: " + $user
                     ' >> inventory.yaml
                 else
                     echo "$devices_json" | jq -r '
-                        (.hostname + " " + .dnsname) as $hostname |
-                        "    " + $hostname + ":\n      ansible_host: " + .dnsname
+                        "          " + .dnsname + ":\n" +
+                        "          ansible_host: " + .dnsname
                     ' >> inventory.yaml
                 fi
                 continue
@@ -390,16 +407,14 @@ generate_inventory() {
                     devices_json=$(get_devices_with_custom_tag "$TAILSCALE_STATUS" "$child")
                     if [ "$use_ssh_keys" = true ]; then
                         echo "$devices_json" | jq -r --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
-                            (.hostname + " " + .dnsname) as $hostname |
-                            "        " + $hostname + ":\n" +
-                            "          ansible_host: " + .dnsname + "\n" +
-                            "          ansible_user: " + $user + "\n" +
-                            "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname)
+                            "          " + .dnsname + ":\n" +
+                            "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname) + "\n" +
+                            "          ansible_user: " + $user
                         ' >> inventory.yaml
                     else
                         echo "$devices_json" | jq -r '
-                            (.hostname + " " + .dnsname) as $hostname |
-                            "        " + $hostname + ":\n          ansible_host: " + .dnsname
+                            "          " + .dnsname + ":\n" +
+                            "          ansible_host: " + .dnsname
                         ' >> inventory.yaml
                     fi
                 done
@@ -408,16 +423,14 @@ generate_inventory() {
                 devices_json=$(get_devices_with_custom_tag "$TAILSCALE_STATUS" "$parent")
                 if [ "$use_ssh_keys" = true ]; then
                     echo "$devices_json" | jq -r --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
-                        (.hostname + " " + .dnsname) as $hostname |
-                        "    " + $hostname + ":\n" +
-                        "      ansible_host: " + .dnsname + "\n" +
-                        "      ansible_user: " + $user + "\n" +
-                        "      ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname)
+                        "          " + .dnsname + ":\n" +
+                        "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname) + "\n" +
+                        "          ansible_user: " + $user
                     ' >> inventory.yaml
                 else
                     echo "$devices_json" | jq -r '
-                        (.hostname + " " + .dnsname) as $hostname |
-                        "    " + $hostname + ":\n      ansible_host: " + .dnsname
+                        "          " + .dnsname + ":\n" +
+                        "          ansible_host: " + .dnsname
                     ' >> inventory.yaml
                 fi
             fi
@@ -476,98 +489,68 @@ generate_inventory() {
                 tag_name="tag:$tag_name"
             fi
             
-            # Get hosts that match this tag and update used_hosts array
-            local matching_hosts=$(echo "$TAILSCALE_STATUS" | jq -r --arg tag "$tag_name" '
-                [(.Self, .Peer[]?)
-                | select(.Tags[]? == $tag)
-                | select(.HostName != null and .DNSName != null)
-                | .HostName + " " + (.DNSName | rtrimstr("."))]
-                | unique
-                | .[]')
+            if [ "$use_ssh_keys" = true ]; then
+                echo "$TAILSCALE_STATUS" | jq -r --arg tag "$tag_name" --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
+                    (.Self, .Peer[]?)
+                    | select(.Tags[]? == $tag)
+                    | select(.HostName != null and .DNSName != null)
+                    | (.DNSName | rtrimstr(".")) as $hostname |
+                    "    " + $hostname + ":\n" +
+                    "      ansible_host: " + (.DNSName | rtrimstr(".")) + "\n" +
+                    "      ansible_user: " + $user + "\n" +
+                    "      ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + (.DNSName | rtrimstr(".")))
+                ' >> inventory.yaml
+            else
+                echo "$TAILSCALE_STATUS" | jq -r --arg tag "$tag_name" '
+                    (.Self, .Peer[]?)
+                    | select(.Tags[]? == $tag)
+                    | select(.HostName != null and .DNSName != null)
+                    | (.DNSName | rtrimstr(".")) as $hostname
+                    | "    " + $hostname + ":\n      ansible_host: " + (.DNSName | rtrimstr("."))
+                ' >> inventory.yaml
+            fi
 
-            while IFS= read -r hostname; do
-                if [ -n "$hostname" ] && [[ ! " ${used_hosts[@]} " =~ " ${hostname} " ]]; then
-                    used_hosts+=("$hostname")
-                    
-                    # Quote hostnames that contain spaces
-                    local quoted_hostname="$hostname"
-                    if [[ "$hostname" == *" "* ]]; then
-                        quoted_hostname="\"$hostname\""
-                    fi
-                    
-                    if [ "$use_ssh_keys" = true ]; then
-                        local dnsname=$(echo "$hostname" | awk '{print $NF}')
-                        echo "${indent}${quoted_hostname}:" >> inventory.yaml
-                        echo "${indent}  ansible_host: $dnsname" >> inventory.yaml
-                        echo "${indent}  ansible_user: $USER" >> inventory.yaml
-                        echo "${indent}  ansible_ssh_private_key_file: $KEY_DIR/${SSH_ALGO}_${dnsname}" >> inventory.yaml
-                    else
-                        local dnsname=$(echo "$hostname" | awk '{print $NF}')
-                        echo "${indent}${quoted_hostname}:" >> inventory.yaml
-                        echo "${indent}  ansible_host: $dnsname" >> inventory.yaml
-                    fi
-                fi
-            done <<< "$matching_hosts"
+            # Keep track of which hosts we've assigned
+            used_hosts+=("$hostname")
         }
 
         # Write inventory structure
-        declare -A group_hosts
-
         for parent in "${parents[@]}"; do
+            echo "$parent:" >> inventory.yaml
+            
             if [ "$parent" = "hosts" ]; then
-                echo "$parent:" >> inventory.yaml
-                echo "  hosts:" >> inventory.yaml
-                write_hosts "$parent" "    "
+                write_hosts "$parent" "  "
                 continue
             fi
-            
-            # Write parent group directly without nesting
-            echo "$parent:" >> inventory.yaml
             
             if [ -n "${parent_children[$parent]}" ]; then
                 echo "  children:" >> inventory.yaml
                 for child in ${parent_children[$parent]}; do
                     echo "    $child:" >> inventory.yaml
-                    echo "      hosts:" >> inventory.yaml
-                    write_hosts "$child" "        "
+                    write_hosts "$child" "      "
                 done
             else
-                echo "  hosts:" >> inventory.yaml
-                write_hosts "$parent" "    "
+                write_hosts "$parent" "  "
             fi
         done
 
-        # Add unknown section only if there are unassigned hosts
+        # Before writing unknown hosts, ensure used_hosts_json is valid even if used_hosts is empty
         if [ "${#used_hosts[@]}" -eq 0 ]; then
             used_hosts_json='[]'
         else
             used_hosts_json=$(printf '%s\n' "${used_hosts[@]}" | jq -R . | jq -s .)
         fi
 
-        local unknown_hosts=$(echo "$TAILSCALE_STATUS" | jq -r --argjson used_hosts "$used_hosts_json" '
-            [(.Self, .Peer[]?)
+        # Add unknown group for unmatched hosts (those without matching tags)
+        echo "unknown:" >> inventory.yaml
+        echo "  hosts:" >> inventory.yaml
+        echo "$TAILSCALE_STATUS" | jq -r --argjson used_hosts "$used_hosts_json" '
+            (.Self, .Peer[]?)
             | select(.HostName != null and .DNSName != null)
-            | (.HostName + " " + (.DNSName | rtrimstr("."))) as $hostname
+            | (.DNSName | rtrimstr(".")) as $hostname
             | select($used_hosts | index($hostname) | not)
-            | $hostname]
-            | unique[]')
-
-        if [ -n "$unknown_hosts" ]; then
-            echo "unknown:" >> inventory.yaml
-            echo "  hosts:" >> inventory.yaml
-            while IFS= read -r hostname; do
-                if [ -n "$hostname" ]; then
-                    # Quote hostnames that contain spaces
-                    local quoted_hostname="$hostname"
-                    if [[ "$hostname" == *" "* ]]; then
-                        quoted_hostname="\"$hostname\""
-                    fi
-                    local dnsname=$(echo "$hostname" | awk '{print $NF}')
-                    echo "    ${quoted_hostname}:" >> inventory.yaml
-                    echo "      ansible_host: $dnsname" >> inventory.yaml
-                fi
-            done <<< "$unknown_hosts"
-        fi
+            | "    " + $hostname + ":\n      ansible_host: " + (.DNSName | rtrimstr("."))
+        ' >> inventory.yaml
     fi
 }
 
@@ -622,27 +605,8 @@ get_yes_no() {
     done
 }
 
-# Function to check for cyclic relationships
-is_cycle() {
-    local parent="$1"
-    local child="$2"
-    if [[ "$child" == "$parent" ]]; then
-        return 0
-    fi
-    for sub_child in ${parent_children["$child"]}; do
-        if is_cycle "$parent" "$sub_child"; then
-            return 0
-        fi
-    done
-    return 1
-}
-
 # Function to collect parent-child relationships
 collect_relationships() {
-    # Clear existing relationships
-    parents=()
-    parent_children=()
-    
     show_available_tags
 
     if ! get_yes_no "Would you like to enter a parent?"; then
@@ -655,7 +619,7 @@ collect_relationships() {
         parent=$(get_tag_selection "Enter parent name or select a tag")
         parents+=("$parent")
         parent_children["$parent"]=""
-
+        
         while true; do
             echo "Enter child names or select tags (separate by semicolons):"
             read -p "Enter numbers or custom names: " child_input
@@ -676,20 +640,15 @@ collect_relationships() {
                         child="$child_selection"
                     fi
                 fi
-                # Prevent adding a group as its own child or creating cycles
-                if is_cycle "$parent" "$child"; then
-                    echo "Cannot add '$child' as it creates a cyclic relationship. Skipping."
+                if [ -z "${parent_children[$parent]}" ]; then
+                    parent_children["$parent"]="$child"
                 else
-                    if [ -z "${parent_children[$parent]}" ]; then
-                        parent_children["$parent"]="$child"
-                    else
-                        parent_children["$parent"]="${parent_children[$parent]} $child"
-                    fi
+                    parent_children["$parent"]="${parent_children[$parent]} $child"
                 fi
             done
             break
         done
-
+        
         if ! get_yes_no "Would you like to add another parent?"; then
             break
         fi
@@ -698,10 +657,6 @@ collect_relationships() {
 
 # Function to collect custom attribute relationships
 collect_custom_relationships() {
-    # Clear existing relationships
-    parents=()
-    parent_children=()
-    
     local custom_tags=("$@")
     echo -e "\033[1;34mAvailable custom attributes for grouping:\033[0m"
     for i in "${!custom_tags[@]}"; do
@@ -719,7 +674,7 @@ collect_custom_relationships() {
     while true; do
         echo -e "\033[1;32mSelect parent group:\033[0m"
         read -p $'\033[1;33mEnter number or custom name: \033[0m' parent_choice
-
+        
         if [[ "$parent_choice" =~ ^[0-9]+$ ]]; then
             if (( parent_choice > 0 && parent_choice <= ${#custom_tags[@]} )); then
                 parent="${custom_tags[$((parent_choice-1))]}"
@@ -732,10 +687,10 @@ collect_custom_relationships() {
         else
             parent="$parent_choice"
         fi
-
+        
         parents+=("$parent")
         parent_children["$parent"]=""
-
+        
         while get_yes_no "Would you like to add child groups to '$parent'?"; do
             echo "Enter child groups (separate by semicolons):"
             read -p "Enter numbers or custom names: " child_input
@@ -754,20 +709,15 @@ collect_custom_relationships() {
                 else
                     child="$child_selection"
                 fi
-                # Prevent adding a group as its own child or creating cycles
-                if is_cycle "$parent" "$child"; then
-                    echo "Cannot add '$child' as it creates a cyclic relationship. Skipping."
+                if [ -z "${parent_children[$parent]}" ]; then
+                    parent_children["$parent"]="$child"
                 else
-                    if [ -z "${parent_children[$parent]}" ]; then
-                        parent_children["$parent"]="$child"
-                    else
-                        parent_children["$parent"]="${parent_children[$parent]} $child"
-                    fi
+                    parent_children["$parent"]="${parent_children[$parent]} $child"
                 fi
             done
             break
         done
-
+        
         if ! get_yes_no "Would you like to add another parent group?"; then
             break
         fi
