@@ -35,7 +35,7 @@ RETRY_MAX_TIME=60
 DEBUG_MODE=false
 MATCH_BY=name
 EOL
-    chmod 600 "$CONFIG_FILE"  # Secure the config file
+    chmod 600 "$CONFIG_FILE" 
 }
 
 # Save configuration
@@ -215,7 +215,7 @@ get_tailscale_data() {
                     }' >> "$temp_file"
             done
             
-            echo "]" >> "$temp_file"  # End JSON array
+            echo "]" >> "$temp_file"  
             cat "$temp_file"
             rm "$temp_file"
             return 0
@@ -229,7 +229,6 @@ get_tailscale_data() {
 # Function to extract custom tags from API response
 extract_custom_tags() {
     local json_data=$1
-    # Parse JSON input first
     echo "$json_data" | jq -r '
         . as $raw |
         try fromjson catch $raw |
@@ -249,7 +248,6 @@ extract_custom_tags() {
 get_devices_with_custom_tag() {
     local json_data=$1
     local tag_value=$2
-    # Parse JSON input first
     echo "$json_data" | jq -r --arg value "$tag_value" '
         . as $raw |
         try fromjson catch $raw |
@@ -265,12 +263,10 @@ get_devices_with_custom_tag() {
         }'
 }
 
-# Add this new function before main_menu()
 generate_hosts_list() {
     echo -e "\033[1;33mFetching host data...\033[0m"
     local data=$(get_tailscale_data "custom")
     
-    # Extract and sort unique DNS names
     echo "$data" | jq -r '
         . as $raw |
         try fromjson catch $raw |
@@ -348,57 +344,29 @@ generate_inventory() {
         if get_yes_no "Would you like to add SSH keys to the hosts?"; then
             use_ssh_keys=true
             
-            # Get SSH key directory
             echo -e "\033[1;34mPlease specify the directory containing your SSH keys\033[0m"
             echo -e "\033[1;33mExample: /home/example/ssh_keys/ansibledevicekeys\033[0m"
             read -p "Key directory: " KEY_DIR
             
-            # Validate directory exists
             if [ ! -d "$KEY_DIR" ]; then
                 echo -e "\033[1;31mDirectory does not exist. Creating it...\033[0m"
                 mkdir -p "$KEY_DIR"
             fi
             
-            # Get SSH user
             read -p "Enter SSH user for hosts: " USER
             
-            # Get SSH algorithm
             echo -e "\033[1;34mSpecify the SSH key algorithm being used\033[0m"
             echo -e "\033[1;33mExample: if your keys are named 'id_ed25519_hostname.domain', enter 'id_ed25519'\033[0m"
             read -p "SSH algorithm (e.g., id_ed25519, id_rsa): " SSH_ALGO
-            
-            echo -e "\033[1;32mSSH Key Configuration:\033[0m"
-            echo -e "\033[1;33mKeys should be named in the format: ${SSH_ALGO}_hostname.domain\033[0m"
-            echo -e "\033[1;33mExample: ${SSH_ALGO}_device.tailnet.ts.net\033[0m"
-            echo -e "\033[1;33mBoth private (no extension) and public (.pub) keys should exist\033[0m"
-            read -p "Press Enter to continue..."
         fi
 
-        # Initialize inventory file
+        # Initialise inventory file
         echo "# Ansible inventory generated from Tailscale custom data" > inventory.yaml
         echo "---" >> inventory.yaml
         
         # Write inventory structure using parent/child relationships
         for parent in "${parents[@]}"; do
             echo "$parent:" >> inventory.yaml
-            
-            if [ "$parent" = "all" ]; then
-                echo "  hosts:" >> inventory.yaml
-                devices_json=$(get_devices_with_custom_tag "$TAILSCALE_STATUS" "${custom_tags[0]}")
-                if [ "$use_ssh_keys" = true ]; then
-                    echo "$devices_json" | jq -r --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
-                        "          " + .dnsname + ":\n" +
-                        "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname) + "\n" +
-                        "          ansible_user: " + $user
-                    ' >> inventory.yaml
-                else
-                    echo "$devices_json" | jq -r '
-                        "          " + .dnsname + ":\n" +
-                        "          ansible_host: " + .dnsname
-                    ' >> inventory.yaml
-                fi
-                continue
-            fi
             
             if [ -n "${parent_children[$parent]}" ]; then
                 echo "  children:" >> inventory.yaml
@@ -408,13 +376,14 @@ generate_inventory() {
                     devices_json=$(get_devices_with_custom_tag "$TAILSCALE_STATUS" "$child")
                     if [ "$use_ssh_keys" = true ]; then
                         echo "$devices_json" | jq -r --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
-                            "          " + .dnsname + ":\n" +
-                            "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname) + "\n" +
+                            .dnsname as $hostname |
+                            "        " + $hostname + ":\n" +
+                            "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + $hostname) + "\n" +
                             "          ansible_user: " + $user
                         ' >> inventory.yaml
                     else
                         echo "$devices_json" | jq -r '
-                            "          " + .dnsname + ":\n" +
+                            "        " + .dnsname + ":\n" +
                             "          ansible_host: " + .dnsname
                         ' >> inventory.yaml
                     fi
@@ -424,20 +393,21 @@ generate_inventory() {
                 devices_json=$(get_devices_with_custom_tag "$TAILSCALE_STATUS" "$parent")
                 if [ "$use_ssh_keys" = true ]; then
                     echo "$devices_json" | jq -r --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
-                        "          " + .dnsname + ":\n" +
-                        "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + .dnsname) + "\n" +
+                        .dnsname as $hostname |
+                        "        " + $hostname + ":\n" +
+                        "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + $hostname) + "\n" +
                         "          ansible_user: " + $user
                     ' >> inventory.yaml
                 else
                     echo "$devices_json" | jq -r '
-                        "          " + .dnsname + ":\n" +
+                        "        " + .dnsname + ":\n" +
                         "          ansible_host: " + .dnsname
                     ' >> inventory.yaml
                 fi
             fi
         done
     else
-        # Original tag-based inventory generation
+        # Tag-based inventory generation with proper nesting
         collect_relationships
 
         # Ask about SSH keys
@@ -511,7 +481,6 @@ generate_inventory() {
                 ' >> inventory.yaml
             fi
 
-            # Keep track of which hosts we've assigned
             used_hosts+=("$hostname")
         }
 
@@ -528,30 +497,52 @@ generate_inventory() {
                 echo "  children:" >> inventory.yaml
                 for child in ${parent_children[$parent]}; do
                     echo "    $child:" >> inventory.yaml
-                    write_hosts "$child" "      "
+                    echo "      hosts:" >> inventory.yaml
+                    if [ "$use_ssh_keys" = true ]; then
+                        echo "$TAILSCALE_STATUS" | jq -r --arg tag "tag:$child" --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
+                            (.Self, .Peer[]?)
+                            | select(.Tags[]? == $tag)
+                            | select(.HostName != null and .DNSName != null)
+                            | .DNSName | rtrimstr(".") as $hostname
+                            | "        " + $hostname + ":\n" +
+                            "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + $hostname) + "\n" +
+                            "          ansible_user: " + $user
+                        ' >> inventory.yaml
+                    else
+                        echo "$TAILSCALE_STATUS" | jq -r --arg tag "tag:$child" '
+                            (.Self, .Peer[]?)
+                            | select(.Tags[]? == $tag)
+                            | select(.HostName != null and .DNSName != null)
+                            | .DNSName | rtrimstr(".") as $hostname
+                            | "        " + $hostname + ":\n" +
+                            "          ansible_host: " + $hostname
+                        ' >> inventory.yaml
+                    fi
                 done
             else
-                write_hosts "$parent" "  "
+                echo "  hosts:" >> inventory.yaml
+                if [ "$use_ssh_keys" = true ]; then
+                    echo "$TAILSCALE_STATUS" | jq -r --arg tag "tag:$parent" --arg user "$USER" --arg keydir "$KEY_DIR" --arg algo "$SSH_ALGO" '
+                        (.Self, .Peer[]?)
+                        | select(.Tags[]? == $tag)
+                        | select(.HostName != null and .DNSName != null)
+                        | .DNSName | rtrimstr(".") as $hostname
+                        | "        " + $hostname + ":\n" +
+                        "          ansible_ssh_private_key_file: " + ($keydir + "/" + $algo + "_" + $hostname) + "\n" +
+                        "          ansible_user: " + $user
+                    ' >> inventory.yaml
+                else
+                    echo "$TAILSCALE_STATUS" | jq -r --arg tag "tag:$parent" '
+                        (.Self, .Peer[]?)
+                        | select(.Tags[]? == $tag)
+                        | select(.HostName != null and .DNSName != null)
+                        | .DNSName | rtrimstr(".") as $hostname
+                        | "        " + $hostname + ":\n" +
+                        "          ansible_host: " + $hostname
+                    ' >> inventory.yaml
+                fi
             fi
         done
-
-        # Before writing unknown hosts, ensure used_hosts_json is valid even if used_hosts is empty
-        if [ "${#used_hosts[@]}" -eq 0 ]; then
-            used_hosts_json='[]'
-        else
-            used_hosts_json=$(printf '%s\n' "${used_hosts[@]}" | jq -R . | jq -s .)
-        fi
-
-        # Add unknown group for unmatched hosts (those without matching tags)
-        echo "unknown:" >> inventory.yaml
-        echo "  hosts:" >> inventory.yaml
-        echo "$TAILSCALE_STATUS" | jq -r --argjson used_hosts "$used_hosts_json" '
-            (.Self, .Peer[]?)
-            | select(.HostName != null and .DNSName != null)
-            | (.DNSName | rtrimstr(".")) as $hostname
-            | select($used_hosts | index($hostname) | not)
-            | "    " + $hostname + ":\n      ansible_host: " + (.DNSName | rtrimstr("."))
-        ' >> inventory.yaml
     fi
 }
 
